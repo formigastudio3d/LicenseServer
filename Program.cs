@@ -6,17 +6,17 @@ using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-// ----- Config -----------------
+// ----------------- Config -----------------
 var secretKey = Environment.GetEnvironmentVariable("LICENSE_SECRET") ?? "ReplaceWithASecretKey";
-var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL")
-    ?? throw new Exception("DATABASE_URL is not set");
+var rawDbUrl  = Environment.GetEnvironmentVariable("DATABASE_URL")
+               ?? throw new Exception("DATABASE_URL is not set");
 
-// Converte DATABASE_URL (postgres://user:pass@host:port/db)
-static string BuildConn(string rawUrl)
+// Converte postgres://user:pass@host:port/db para connection string Npgsql
+string BuildConn(string rawUrl)
 {
     var uri = new Uri(rawUrl);
     var userInfo = uri.UserInfo.Split(':', 2);
-    var port = uri.Port > 0 ? uri.Port : 5432; // força porta se não vier no URL
+    var port = uri.Port > 0 ? uri.Port : 5432;
 
     var csb = new NpgsqlConnectionStringBuilder
     {
@@ -31,14 +31,14 @@ static string BuildConn(string rawUrl)
     return csb.ConnectionString;
 }
 
-var connString = BuildConn(databaseUrl);
+var connString = BuildConn(rawDbUrl);
 
-// ----- Modelo -----------------
+// ----------------- Models -----------------
 record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
 record LicenseToken(string Token);
 record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
 
-// ----- Helpers ----------------
+// ----------------- Helpers -----------------
 async Task EnsureTableAsync()
 {
     await using var conn = new NpgsqlConnection(connString);
@@ -83,7 +83,7 @@ LicenseStatus ValidateToken(string token, string hardwareId)
     {
         var raw = Encoding.UTF8.GetString(Convert.FromBase64String(token));
         var parts = raw.Split('|');
-        if (parts.Length != 4) return new(false, null, null, "token mal formado");
+        if (parts.Length != 4) return new(false, null, null, "token malformado");
 
         var hw = parts[0];
         var exp = DateTime.Parse(parts[1]);
@@ -104,8 +104,9 @@ LicenseStatus ValidateToken(string token, string hardwareId)
     }
 }
 
-// ----- Endpoints -------------
+// ----------------- Endpoints -----------------
 app.MapGet("/", () => Results.Ok("LicenseServer ok"));
+
 app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
 {
     if (string.IsNullOrWhiteSpace(req.HardwareId))
@@ -115,12 +116,10 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
     await using var conn = new NpgsqlConnection(connString);
     await conn.OpenAsync();
 
-    // Busca registro
     DateTime? expiresAt = null;
     int? maxNodes = null;
-    var select = """
-        select expires_at, max_nodes from licenses where hardware_id = @hw
-    """;
+
+    const string select = "select expires_at, max_nodes from licenses where hardware_id = @hw";
     await using (var cmd = new NpgsqlCommand(select, conn))
     {
         cmd.Parameters.AddWithValue("hw", req.HardwareId);
@@ -132,12 +131,11 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
         }
     }
 
-    // Se não existir, cria
     if (expiresAt == null)
     {
         expiresAt = DateTime.UtcNow.AddDays(req.Days);
         maxNodes = req.MaxNodes;
-        var insert = """
+        const string insert = """
             insert into licenses (hardware_id, expires_at, max_nodes, last_issued)
             values (@hw, @exp, @mx, now())
         """;
@@ -149,12 +147,10 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
     }
     else
     {
-        // Se já expirou, responde 402
         if (DateTime.UtcNow > expiresAt.Value)
             return Results.StatusCode(StatusCodes.Status402PaymentRequired);
 
-        // Atualiza last_issued
-        var update = "update licenses set last_issued = now() where hardware_id = @hw";
+        const string update = "update licenses set last_issued = now() where hardware_id = @hw";
         await using var cmd = new NpgsqlCommand(update, conn);
         cmd.Parameters.AddWithValue("hw", req.HardwareId);
         await cmd.ExecuteNonQueryAsync();
@@ -173,17 +169,15 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
     var status = ValidateToken(body.Token, hardwareId);
     if (!status.Valid) return Results.Ok(status);
 
-    // Confirma expiração no banco
     await using var conn = new NpgsqlConnection(connString);
     await conn.OpenAsync();
-    var sql = """
-        select expires_at, max_nodes from licenses where hardware_id = @hw
-    """;
+    const string sql = "select expires_at, max_nodes from licenses where hardware_id = @hw";
     await using var cmd = new NpgsqlCommand(sql, conn);
     cmd.Parameters.AddWithValue("hw", hardwareId);
     await using var rdr = await cmd.ExecuteReaderAsync();
     if (!await rdr.ReadAsync())
         return Results.Ok(new LicenseStatus(false, null, null, "hardware não encontrado"));
+
     var exp = rdr.GetDateTime(0);
     var mx = rdr.GetInt32(1);
     if (DateTime.UtcNow > exp)
@@ -193,4 +187,3 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
 });
 
 app.Run();
-
