@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Npgsql;
 
@@ -7,7 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
 // Config
-var secretKey = Environment.GetEnvironmentVariable("LICENSE_SECRET") ?? "ReplaceWithASecretKey";
+var secretKey = Environment.GetEnvironmentVariable("LICENSE_SECRET") ?? "ReplaceWithYourSecretKey";
 var rawDbUrl  = Environment.GetEnvironmentVariable("DATABASE_URL")
                ?? throw new Exception("DATABASE_URL is not set");
 
@@ -32,6 +33,12 @@ string BuildConn(string rawUrl)
 }
 
 var connString = BuildConn(rawDbUrl);
+
+// Models
+record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
+record LicenseToken(string Token);
+record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
+record LicenseTokenDto(string HardwareId, DateTime ExpiresAt, string Source, int MaxNodes);
 
 // Helpers
 async Task EnsureTableAsync()
@@ -67,31 +74,31 @@ bool Verify(string payload, string signature)
 
 string IssueToken(string hardwareId, DateTime expiresAt, int maxNodes)
 {
-    var payload = $"{hardwareId}|{expiresAt:o}|{maxNodes}";
-    var sig = Sign(payload);
-    return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{payload}|{sig}"));
+    var dto = new LicenseTokenDto(hardwareId, expiresAt, "server", maxNodes);
+    var payloadJson = JsonSerializer.Serialize(dto);
+    var payloadB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(payloadJson));
+    var sig = Sign(payloadJson);
+    return $"{payloadB64}.{sig}";
 }
 
 LicenseStatus ValidateToken(string token, string hardwareId)
 {
     try
     {
-        var raw = Encoding.UTF8.GetString(Convert.FromBase64String(token));
-        var parts = raw.Split('|');
-        if (parts.Length != 4) return new(false, null, null, "token malformado");
+        var parts = token.Split('.', 2);
+        if (parts.Length != 2) return new(false, null, null, "token malformado");
 
-        var hw = parts[0];
-        var exp = DateTime.Parse(parts[1]);
-        var maxNodes = int.Parse(parts[2]);
-        var sig = parts[3];
+        var payloadJson = Encoding.UTF8.GetString(Convert.FromBase64String(parts[0]));
+        var sig = parts[1];
+        if (!Verify(payloadJson, sig)) return new(false, null, null, "assinatura invalida");
 
-        var payload = $"{hw}|{exp:o}|{maxNodes}";
-        if (!Verify(payload, sig)) return new(false, null, null, "assinatura invalida");
-        if (!string.Equals(hw, hardwareId, StringComparison.OrdinalIgnoreCase))
-            return new(false, null, null, "hardware diferente");
-        if (DateTime.UtcNow > exp) return new(false, exp, maxNodes, "expirada");
+        var dto = JsonSerializer.Deserialize<LicenseTokenDto>(payloadJson);
+        if (dto is null) return new(false, null, null, "payload invalido");
+        if (!string.Equals(dto.HardwareId, hardwareId, StringComparison.OrdinalIgnoreCase))
+            return new(false, dto.ExpiresAt, dto.MaxNodes, "hardware diferente");
+        if (DateTime.UtcNow > dto.ExpiresAt) return new(false, dto.ExpiresAt, dto.MaxNodes, "expirada");
 
-        return new(true, exp, maxNodes, "ok");
+        return new(true, dto.ExpiresAt, dto.MaxNodes, "ok");
     }
     catch
     {
@@ -182,8 +189,3 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
 });
 
 app.Run();
-
-// Models
-record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
-record LicenseToken(string Token);
-record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
