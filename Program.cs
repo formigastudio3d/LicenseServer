@@ -33,17 +33,12 @@ string BuildConn(string rawUrl)
 
 var connString = BuildConn(rawDbUrl);
 
-// Models
-record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
-record LicenseToken(string Token);
-record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
-
 // Helpers
 async Task EnsureTableAsync()
 {
     await using var conn = new NpgsqlConnection(connString);
     await conn.OpenAsync();
-    const string sql = """
+    const string sql = @"""
         create table if not exists licenses (
             hardware_id text primary key,
             expires_at  timestamptz not null,
@@ -91,7 +86,7 @@ LicenseStatus ValidateToken(string token, string hardwareId)
         var sig = parts[3];
 
         var payload = $"{hw}|{exp:o}|{maxNodes}";
-        if (!Verify(payload, sig)) return new(false, null, null, "assinatura inválida");
+        if (!Verify(payload, sig)) return new(false, null, null, "assinatura invalida");
         if (!string.Equals(hw, hardwareId, StringComparison.OrdinalIgnoreCase))
             return new(false, null, null, "hardware diferente");
         if (DateTime.UtcNow > exp) return new(false, exp, maxNodes, "expirada");
@@ -110,7 +105,7 @@ app.MapGet("/", () => Results.Ok("LicenseServer ok"));
 app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
 {
     if (string.IsNullOrWhiteSpace(req.HardwareId))
-        return Results.BadRequest("HardwareId obrigatório");
+        return Results.BadRequest("HardwareId obrigatorio");
 
     await EnsureTableAsync();
     await using var conn = new NpgsqlConnection(connString);
@@ -135,7 +130,7 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
     {
         expiresAt = DateTime.UtcNow.AddDays(req.Days);
         maxNodes = req.MaxNodes;
-        const string insert = """
+        const string insert = @"""
             insert into licenses (hardware_id, expires_at, max_nodes, last_issued)
             values (@hw, @exp, @mx, now())
         """;
@@ -163,7 +158,7 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
 app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] string hardwareId) =>
 {
     if (string.IsNullOrWhiteSpace(hardwareId))
-        return Results.BadRequest("hardwareId obrigatório");
+        return Results.BadRequest("hardwareId obrigatorio");
 
     await EnsureTableAsync();
     var status = ValidateToken(body.Token, hardwareId);
@@ -176,7 +171,7 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
     cmd.Parameters.AddWithValue("hw", hardwareId);
     await using var rdr = await cmd.ExecuteReaderAsync();
     if (!await rdr.ReadAsync())
-        return Results.Ok(new LicenseStatus(false, null, null, "hardware não encontrado"));
+        return Results.Ok(new LicenseStatus(false, null, null, "hardware nao encontrado"));
 
     var exp = rdr.GetDateTime(0);
     var mx = rdr.GetInt32(1);
@@ -187,3 +182,8 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
 });
 
 app.Run();
+
+// Models (colocados ao final para evitar CS8803)
+record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
+record LicenseToken(string Token);
+record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
