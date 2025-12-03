@@ -6,12 +6,12 @@ using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();
 
-// ----------------- Config -----------------
+// Config
 var secretKey = Environment.GetEnvironmentVariable("LICENSE_SECRET") ?? "ReplaceWithASecretKey";
 var rawDbUrl  = Environment.GetEnvironmentVariable("DATABASE_URL")
                ?? throw new Exception("DATABASE_URL is not set");
 
-// Converte postgres://user:pass@host:port/db para connection string Npgsql
+// Converte postgres://... para Npgsql
 string BuildConn(string rawUrl)
 {
     var uri = new Uri(rawUrl);
@@ -33,17 +33,17 @@ string BuildConn(string rawUrl)
 
 var connString = BuildConn(rawDbUrl);
 
-// ----------------- Models -----------------
+// Models
 record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
 record LicenseToken(string Token);
 record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
 
-// ----------------- Helpers -----------------
+// Helpers
 async Task EnsureTableAsync()
 {
     await using var conn = new NpgsqlConnection(connString);
     await conn.OpenAsync();
-    var sql = """
+    const string sql = """
         create table if not exists licenses (
             hardware_id text primary key,
             expires_at  timestamptz not null,
@@ -104,7 +104,7 @@ LicenseStatus ValidateToken(string token, string hardwareId)
     }
 }
 
-// ----------------- Endpoints -----------------
+// Endpoints
 app.MapGet("/", () => Results.Ok("LicenseServer ok"));
 
 app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
