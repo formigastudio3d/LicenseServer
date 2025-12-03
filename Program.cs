@@ -38,14 +38,14 @@ async Task EnsureTableAsync()
 {
     await using var conn = new NpgsqlConnection(connString);
     await conn.OpenAsync();
-    const string sql = @"""
+    const string sql = @"
         create table if not exists licenses (
             hardware_id text primary key,
             expires_at  timestamptz not null,
             max_nodes   int not null,
             last_issued timestamptz not null
         );
-    """;
+    ";
     await using var cmd = new NpgsqlCommand(sql, conn);
     await cmd.ExecuteNonQueryAsync();
 }
@@ -130,10 +130,10 @@ app.MapPost("/license/issue", async ([FromBody] LicenseRequest req) =>
     {
         expiresAt = DateTime.UtcNow.AddDays(req.Days);
         maxNodes = req.MaxNodes;
-        const string insert = @"""
+        const string insert = @"
             insert into licenses (hardware_id, expires_at, max_nodes, last_issued)
             values (@hw, @exp, @mx, now())
-        """;
+        ";
         await using var cmd = new NpgsqlCommand(insert, conn);
         cmd.Parameters.AddWithValue("hw", req.HardwareId);
         cmd.Parameters.AddWithValue("exp", expiresAt.Value);
@@ -183,7 +183,7 @@ app.MapPost("/license/verify", async ([FromBody] LicenseToken body, [FromQuery] 
 
 app.Run();
 
-// Models (colocados ao final para evitar CS8803)
+// Models
 record LicenseRequest(string HardwareId, int Days = 30, int MaxNodes = 2);
 record LicenseToken(string Token);
 record LicenseStatus(bool Valid, DateTime? ExpiresAt, int? MaxNodes, string? Message);
